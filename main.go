@@ -6,11 +6,12 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
+	"unicode/utf8"
+	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/line/line-bot-sdk-go/v8/linebot"
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -78,8 +79,12 @@ func sendRestoInfo(bot *linebot.Client, e *linebot.Event) {
 
 	replyMsg := getRestoInfo(lat, lng)
 
-	_, err := bot.ReplyMessage(e.ReplyToken, linebot.NewTextMessage(replyMsg)).Do()
-	if err != nil {
+	res := linebot.NewTemplateMessage(
+		"レストラン一覧",
+		linebot.NewCarouselTemplate(replyMsg...).WithImageOptions("rectangle", "cover"),
+	)
+
+	if _, err := bot.ReplyMessage(e.ReplyToken, res).Do(); err != nil {
 		log.Print(err)
 	}
 }
@@ -98,55 +103,61 @@ type results struct {
 type shop struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
+	Photo   photo  `json:"photo"`
+	URLS    urls   `json:"urls"`
 }
 
-func getRestoInfo(lat string, lng string) string {
-	apikey := os.Getenv("HOTPEPPER_API_KEY")
-	if apikey == "" {
-		log.Printf("Error: HOTPEPPER_API_KEY is not set")
-		return "APIキーが設定されていません"
-	}
+// photo 写真URL一覧
+type photo struct {
+	Mobile mobile `json:"mobile"`
+}
 
+// mobile モバイル用の写真URL
+type mobile struct {
+	L string `json:"l"`
+}
+
+// urls URL一覧
+type urls struct {
+	PC string `json:"pc"`
+}
+
+func getRestoInfo(lat string, lng string) []*linebot.CarouselColumn {
+	apikey := os.Getenv("HOTPEPPER_API_KEY")
 	url := fmt.Sprintf(
-		"https://webservice.recruit.co.jp/hotpepper/gourmet/v1/?format=json&key=%s&lat=%s&lng=%s&range=3&count=5",
+		"https://webservice.recruit.co.jp/hotpepper/gourmet/v1/?format=json&key=%s&lat=%s&lng=%s",
 		apikey, lat, lng)
-	
-	log.Printf("Requesting HotPepper API: %s", url)
 
 	// リクエストしてボディを取得
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Printf("Error making request to HotPepper API: %v", err)
-		return "レストラン情報の取得に失敗しました"
+		log.Fatal(err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("HotPepper API returned non-200 status code: %d", resp.StatusCode)
-		return "レストラン情報の取得に失敗しました"
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Error reading response body: %v", err)
-		return "レストラン情報の取得に失敗しました"
+		log.Fatal(err)
 	}
-
-	log.Printf("Received response from HotPepper API: %s", string(body))
 
 	var data response
 	if err := json.Unmarshal(body, &data); err != nil {
-		log.Printf("Error parsing JSON response: %v", err)
-		return "レストラン情報の解析に失敗しました"
+		log.Fatal(err)
 	}
 
-	if len(data.Results.Shop) == 0 {
-		return "周辺にレストランが見つかりませんでした"
-	}
-
-	info := "周辺のレストラン情報：\n\n"
+	var ccs []*linebot.CarouselColumn
 	for _, shop := range data.Results.Shop {
-		info += fmt.Sprintf("店舗名：%s\n住所：%s\n\n", shop.Name, shop.Address)
+		addr := shop.Address
+		if 60 < utf8.RuneCountInString(addr) {
+			addr = string([]rune(addr)[:60])
+		}
+
+		cc := linebot.NewCarouselColumn(
+			shop.Photo.Mobile.L,
+			shop.Name,
+			addr,
+			linebot.NewURIAction("ホットペッパーで開く", shop.URLS.PC),
+		).WithImageOptions("#FFFFFF")
+		ccs = append(ccs, cc)
 	}
-	return info
+	return ccs
 }
