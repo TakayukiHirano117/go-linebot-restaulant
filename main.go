@@ -3,9 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/joho/godotenv"
@@ -100,30 +101,52 @@ type shop struct {
 }
 
 func getRestoInfo(lat string, lng string) string {
-	apikey := "(自分のAPIKEYを入力)"
+	apikey := os.Getenv("HOTPEPPER_API_KEY")
+	if apikey == "" {
+		log.Printf("Error: HOTPEPPER_API_KEY is not set")
+		return "APIキーが設定されていません"
+	}
+
 	url := fmt.Sprintf(
-		"https://webservice.recruit.co.jp/hotpepper/gourmet/v1/?format=json&key=%s&lat=%s&lng=%s",
+		"https://webservice.recruit.co.jp/hotpepper/gourmet/v1/?format=json&key=%s&lat=%s&lng=%s&range=3&count=5",
 		apikey, lat, lng)
+	
+	log.Printf("Requesting HotPepper API: %s", url)
 
 	// リクエストしてボディを取得
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Error making request to HotPepper API: %v", err)
+		return "レストラン情報の取得に失敗しました"
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("HotPepper API returned non-200 status code: %d", resp.StatusCode)
+		return "レストラン情報の取得に失敗しました"
 	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Error reading response body: %v", err)
+		return "レストラン情報の取得に失敗しました"
+	}
+
+	log.Printf("Received response from HotPepper API: %s", string(body))
 
 	var data response
 	if err := json.Unmarshal(body, &data); err != nil {
-		log.Fatal(err)
+		log.Printf("Error parsing JSON response: %v", err)
+		return "レストラン情報の解析に失敗しました"
 	}
 
-	info := ""
+	if len(data.Results.Shop) == 0 {
+		return "周辺にレストランが見つかりませんでした"
+	}
+
+	info := "周辺のレストラン情報：\n\n"
 	for _, shop := range data.Results.Shop {
-		info += shop.Name + "\n" + shop.Address + "\n\n"
+		info += fmt.Sprintf("店舗名：%s\n住所：%s\n\n", shop.Name, shop.Address)
 	}
 	return info
 }
